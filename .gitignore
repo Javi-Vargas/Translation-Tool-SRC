@@ -1,0 +1,23 @@
+# Dependency wheels — re-buildable via staging/build_offline_bundle.sh
+backend/wheels/*.whl
+
+# Staging artifacts
+staging/.staging-venv/
+staging/model-cache/
+staging/*.log
+
+# Model cache (never commit ~15 GB of weights)
+**/models--*/
+*.safetensors
+*.incomplete
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.swp

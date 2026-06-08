@@ -1,0 +1,30 @@
+# CTI Translation backend — V3 dependencies (llama-cpp-python / GGUF).
+#
+# Replaces the transformers + torch ML stack (~2 GB of wheels) with a single
+# llama-cpp-python package.  Everything else (FastAPI, uvicorn, pydantic) is
+# identical to V1/V2.
+#
+# Platform: Ubuntu 24 LTS, Python 3.12, linux x86_64.
+#
+# NOTE: llama-cpp-python ships pre-built CPU wheels for this platform.
+# If pip download falls back to an sdist, build it on the staging host:
+#     pip wheel llama-cpp-python -w wheels/
+# See wheels/DOWNLOAD_INSTRUCTIONS.md step 3 for the general procedure.
+#
+# Staging (pin + download wheels):
+#     staging/build_offline_bundle_v3.sh
+#
+# Install offline:
+#     pip install --no-index --find-links=wheels/ -r requirements_v3.txt
+
+# ML inference engine (replaces torch + transformers + tokenizers + safetensors
+# + sentencepiece + accelerate + huggingface_hub in V1/V2)
+llama-cpp-python
+
+# Web server
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+python-multipart
+starlette

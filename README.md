@@ -50,6 +50,17 @@ threat-intelligence glossary.
 
 ---
 
+## Backend engine
+
+The service runs `app_v3.py` — **llama-cpp-python with a GGUF Q5_K_M
+quantised model** (~3 min/doc on CPU, ≥ 8 GB RAM).
+
+Earlier transformer-based implementations (`app.py` float32, `app_v2.py`
+bfloat16 + torch.compile) are kept in the repo for reference but are not
+used in deployment.
+
+---
+
 ## Repository layout
 
 ```
@@ -58,10 +69,14 @@ threat-intelligence glossary.
 ├── REQUIREMENTS.md            bill of materials, acquisition + placement guide
 ├── DEPLOYMENT_RUNBOOK.md      step-by-step deploy + verification + troubleshooting
 ├── backend/                   → deploy to VM 2 and VM 3
-│   ├── app.py                 FastAPI app, model loading, /health + /translate, CTI scoring
+│   ├── app_v3.py              FastAPI + llama-cpp-python, GGUF Q5_K_M (~3 min/doc)  ← active
 │   ├── placeholder_utils.py   CTI term protect/restore substitution
-│   ├── requirements.txt       pinned deps (Python 3.12, CPU-only torch)
-│   ├── setup.sh               venv + offline install + systemd service
+│   ├── requirements_v3.txt    pinned deps (llama-cpp-python)                         ← active
+│   ├── setup_v3.sh            venv + offline install + systemd service               ← active
+│   ├── app.py                 [archive] V1: transformers, float32
+│   ├── app_v2.py              [archive] V2: bfloat16 + torch.compile
+│   ├── requirements.txt       [archive] V1/V2 deps (CPU-only torch)
+│   ├── setup.sh               [archive] V1/V2 setup
 │   └── wheels/                offline dependency wheels (not in git — see below)
 │       └── DOWNLOAD_INSTRUCTIONS.md
 ├── frontend/                  → deploy to VM 1
@@ -69,8 +84,9 @@ threat-intelligence glossary.
 │   ├── nginx.conf             reverse proxy + load balancer
 │   └── ui/index.html          self-contained Google-Translate-style UI
 └── staging/                   → run on an internet-connected machine
-    ├── build_offline_bundle.sh   pin requirements + download wheels
-    └── download_model.sh         download Qwen2.5-7B weights
+    ├── build_offline_bundle.sh      pin requirements_v3.txt + download wheels
+    ├── download_model_gguf.sh       download Qwen2.5-7B GGUF Q5_K_M (~5.5 GB)      ← active
+    └── download_model.sh            [archive] download safetensors weights (V1/V2)
 ```
 
 > **Not included in this repo (by design):** the ~246 MB of dependency wheels and
@@ -89,8 +105,8 @@ A guided order from concept → requirements → implementation → deployment:
    7B float32 model) and the artifact placement matrix.
 2. **`DEPLOYMENT_RUNBOOK.md`** — the operator's how-to: staging → model transfer
    → backend deploy → frontend deploy → verify → scale.
-3. **`backend/app.py`** — the heart of the implementation: endpoints, prompts,
-   the `generate()` pattern, paragraph splitting, and CTI scoring.
+3. **`backend/app_v3.py`** — the heart of the implementation: endpoints, prompts,
+   the llama-cpp-python inference pattern, paragraph splitting, and CTI scoring.
 4. **`backend/placeholder_utils.py`** — the CTI term substitution module.
 5. **`frontend/ui/index.html`** — the entire UI in one file (see the inline
    `<script>` for the `/api/translate` call shape).
@@ -98,7 +114,7 @@ A guided order from concept → requirements → implementation → deployment:
    timeouts that keep slow CPU inference alive.
 
 **Fast path (90% understanding):** `REQUIREMENTS.md` → `DEPLOYMENT_RUNBOOK.md` →
-`backend/app.py`.
+`backend/app_v3.py`.
 
 ---
 
@@ -109,13 +125,13 @@ A guided order from concept → requirements → implementation → deployment:
 1. **Stage** (internet machine, Ubuntu 24 / Python 3.12 / x86_64):
    ```bash
    cd staging
-   ./build_offline_bundle.sh   # pins requirements + downloads wheels
-   ./download_model.sh         # downloads Qwen2.5-7B weights (~15 GB)
+   ./build_offline_bundle.sh      # pins requirements_v3.txt + downloads wheels
+   ./download_model_gguf.sh       # downloads Qwen2.5-7B GGUF Q5_K_M (~5.5 GB)
    ```
-2. **Transfer** `backend/` (+ wheels + model cache) to VM 2 & VM 3, and
+2. **Transfer** `backend/` (+ wheels + GGUF file) to VM 2 & VM 3, and
    `frontend/` to VM 1, per the placement matrix in `REQUIREMENTS.md`.
 3. **Deploy** following `DEPLOYMENT_RUNBOOK.md`:
-   - Backends: edit nothing, run `backend/setup.sh`, wait for `/health` → ready.
+   - Backends: transfer GGUF to `~/models/`, run `backend/setup_v3.sh`, wait for `/health` → ready.
    - Frontend: set the real IPs in `nginx.conf`, run `frontend/setup.sh`.
 4. **Use** it: open `http://FRONTEND_IP` in a browser.
 
@@ -125,20 +141,17 @@ A guided order from concept → requirements → implementation → deployment:
 
 | Node | RAM | Notes |
 |------|-----|-------|
-| Backend VM (×2) | **≥32 GB** | Qwen2.5-7B in `float32` is ~28 GB of weights. Below this it will OOM. |
+| Backend VM (×2) | **≥ 8 GB** | GGUF Q5_K_M is ~5.5 GB in RAM; 8 GB gives comfortable headroom. |
 | Frontend VM | ~1 GB | nginx + static UI only. |
-| Staging machine | ~4 GB | Downloads only; the model is not loaded into RAM during staging. |
+| Staging machine | ~2 GB | Downloads only; model is not loaded into RAM during staging. |
 
 - **OS:** Ubuntu 24 LTS (Python 3.12) on all nodes.
-- **CPU-only:** no GPU required; inference runs on CPU (expect minutes per
-  document — see Notes).
+- **CPU-only:** no GPU required; inference runs on CPU via llama-cpp-python.
 
 ---
 
 ## Notes
 
-- **Latency:** ~3–5 minutes for ~2 paragraphs on CPU with `float32` — this is
-  expected for the faithful configuration. Faster options (bf16, or a quantized
-  GGUF runtime) are possible but intentionally not applied here.
+- **Latency:** ~3 minutes per document on CPU (GGUF Q5_K_M quantisation).
 - **Scaling:** add a backend VM by deploying `backend/` on it and adding one
   line to the `upstream` block in `nginx.conf` (see the runbook).

@@ -16,16 +16,16 @@ is staged on an internet-connected machine first, then physically transferred.
 
 ## 0. Build the package (on the machine running Claude Code)
 
-You already have the `cti-translate/` folder. It contains:
+You already have the `cti-translate/` folder. The active deployment files are:
 
 ```
 cti-translate/
 ├── DEPLOYMENT_RUNBOOK.md        ← this file
 ├── backend/                     ← copy to VM 2 and VM 3
-│   ├── app.py
+│   ├── app_v3.py                FastAPI + llama-cpp-python, GGUF Q5_K_M
 │   ├── placeholder_utils.py
-│   ├── requirements.txt
-│   ├── setup.sh
+│   ├── requirements_v3.txt
+│   ├── setup_v3.sh
 │   └── wheels/                  ← populated by the staging step below
 │       └── DOWNLOAD_INSTRUCTIONS.md
 ├── frontend/                    ← copy to VM 1
@@ -34,27 +34,30 @@ cti-translate/
 │   └── ui/index.html
 └── staging/                     ← run on an INTERNET-connected machine only
     ├── build_offline_bundle.sh
-    └── download_model.sh
+    └── download_model_gguf.sh
 ```
+
+> `app.py`, `app_v2.py`, `setup.sh`, `requirements.txt`, and `download_model.sh`
+> are earlier versions kept for reference. Use the `_v3` variants above.
 
 ---
 
 ## 1. Stage the offline payload (internet-connected machine)
 
-The code is ready, but the **wheels** and **model weights** are binary payloads
+The code is ready, but the **wheels** and **model file** are binary payloads
 that must be downloaded. Do this on a machine WITH internet, ideally matching the
-VMs (Ubuntu, Python 3.11, x86_64).
+VMs (Ubuntu 24, Python 3.12, x86_64).
 
 ```bash
 cd cti-translate/staging
-./build_offline_bundle.sh      # pins requirements.txt + fills backend/wheels/
-./download_model.sh            # downloads Qwen2.5-7B-Instruct into ./model-cache/
+./build_offline_bundle.sh      # pins requirements_v3.txt + fills backend/wheels/
+./download_model_gguf.sh       # downloads Qwen2.5-7B GGUF Q5_K_M into ./model-cache-gguf/
 ```
 
 After this:
-- `backend/requirements.txt` has exact pinned versions
-- `backend/wheels/` is full of `.whl` files
-- `staging/model-cache/` holds the HuggingFace model cache
+- `backend/requirements_v3.txt` has exact pinned versions
+- `backend/wheels/` is full of `.whl` files (~100 MB)
+- `staging/model-cache-gguf/` holds the GGUF model file (~5.5 GB)
 
 ---
 
@@ -64,8 +67,9 @@ After this:
 - [ ] Static IPs assigned to all three VMs
 - [ ] All three VMs can reach each other on the network (test with `ping`)
 - [ ] Python 3.12 + `python3.12-venv` present on VM 2 and VM 3 (default on Ubuntu 24 LTS)
-- [ ] Qwen model weights transferred to VM 2 and VM 3 (Section 3)
+- [ ] GGUF model file transferred to VM 2 and VM 3 at `~/models/` (Section 3)
 - [ ] Deployment package transferred to the right VMs (Section 4 / 5)
+- [ ] **Backend VMs (VM 2, VM 3) have ≥ 8 GB RAM** (GGUF Q5_K_M loads ~5.5 GB)
 - [ ] You know the real IPs — write them here:
   - FRONTEND_IP = ________________
   - BACKEND1_IP = ________________
@@ -73,49 +77,55 @@ After this:
 
 ---
 
-## 3. Model weights transfer (to VM 2 and VM 3)
+## 3. Model file transfer (to VM 2 and VM 3)
 
-### 3a. Download on the internet-connected machine
+### 3a. Download on the internet-connected staging machine
 
-`staging/download_model.sh` already did this. If doing it manually:
-
-```bash
-pip install transformers
-python -c "
-from transformers import AutoTokenizer, AutoModelForCausalLM
-AutoTokenizer.from_pretrained('Qwen/Qwen2.5-7B-Instruct')
-AutoModelForCausalLM.from_pretrained('Qwen/Qwen2.5-7B-Instruct')
-"
-```
-
-### 3b. Locate the cache
-
-```
-~/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/
-```
-
-(Or `staging/model-cache/hub/models--Qwen--Qwen2.5-7B-Instruct/` if you used the
-script.)
-
-### 3c. Transfer to VM 2 and VM 3 at the SAME path
-
-On each backend VM the weights must live at:
-
-```
-~/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/
-```
-
-Copy the entire `models--Qwen--Qwen2.5-7B-Instruct` directory there (USB, scp
-within the offline network, etc.). Preserve the directory structure exactly.
-
-### 3d. Verify offline (on each backend VM)
+`staging/download_model_gguf.sh` already did this. If doing it manually:
 
 ```bash
-export HUGGINGFACE_HUB_OFFLINE=1
-python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen2.5-7B-Instruct'); print('OK')"
+pip install huggingface_hub
+python - <<'PY'
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id="Qwen/Qwen2.5-7B-Instruct-GGUF",
+    filename="qwen2.5-7b-instruct-q5_k_m.gguf",
+    local_dir="staging/model-cache-gguf",
+)
+PY
 ```
 
-`OK` means the weights are in the right place and offline loading works.
+### 3b. Locate the file
+
+```
+staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf    (~5.5 GB)
+```
+
+### 3c. Transfer to VM 2 and VM 3
+
+On each backend VM, create the models directory and copy the file:
+
+```bash
+mkdir -p ~/models
+scp <staging>:cti-translate/staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf \
+    ~/models/
+```
+
+Or transfer via USB/sneakernet if scp is not available across the air-gap.
+The file must end up at:
+
+```
+~/models/qwen2.5-7b-instruct-q5_k_m.gguf
+```
+
+### 3d. Verify on each backend VM
+
+```bash
+ls -lh ~/models/qwen2.5-7b-instruct-q5_k_m.gguf
+```
+
+Expected: a file of approximately 5.5 GB. If the size looks wrong the download
+was interrupted — re-download and re-transfer.
 
 ---
 
@@ -126,24 +136,25 @@ Do this on **each** backend VM.
 1. SSH into the VM.
 2. Copy the `backend/` folder over (e.g. to `~/cti-translate-backend`). It must
    include the populated `wheels/` directory.
-3. Confirm weights are in place (Section 3d).
+3. Confirm the GGUF model file is in place (Section 3d).
 4. Run setup:
    ```bash
    cd ~/cti-translate-backend
-   chmod +x setup.sh
-   ./setup.sh
+   chmod +x setup_v3.sh
+   ./setup_v3.sh
    ```
-5. The script creates `~/translation-venv`, installs from `wheels/` with no
-   internet, installs the systemd service `cti-translate-backend`, and starts it.
-6. Wait 2–4 minutes for the model to load, then verify:
+5. The script checks the model file, creates `~/translation-venv-v3`, installs
+   from `wheels/` with no internet, installs the systemd service
+   `cti-translate-backend-v3`, and starts it.
+6. The GGUF model loads in a few seconds (memory-mapped). Verify readiness:
    ```bash
    curl http://localhost:8000/health
    ```
-   `{"status":"loading"}` (HTTP 503) → still loading; wait.
+   `{"status":"loading"}` (HTTP 503) → still loading; wait a moment.
    `{"status":"ready"}`  (HTTP 200) → ready.
 7. Tail logs if needed:
    ```bash
-   sudo journalctl -u cti-translate-backend -f
+   sudo journalctl -u cti-translate-backend-v3 -f
    ```
 
 Repeat for the second backend VM.
@@ -180,8 +191,8 @@ Repeat for the second backend VM.
    curl http://BACKEND1_IP:8000/health
    curl http://BACKEND2_IP:8000/health
    ```
-   Both should return `{"status":"ready"}`. Model loading takes 2–4 minutes
-   after service start.
+   Both should return `{"status":"ready"}`. The GGUF model loads in a few
+   seconds after service start.
 
 2. **Direct translation against a backend** (bypassing nginx):
    ```bash
@@ -199,7 +210,7 @@ Repeat for the second backend VM.
 5. **Load balancing:** submit two translations in quick succession and confirm
    nginx routes them to different backends — check each backend's logs:
    ```bash
-   sudo journalctl -u cti-translate-backend -f
+   sudo journalctl -u cti-translate-backend-v3 -f
    ```
    You should see request activity split across VM 2 and VM 3.
 
@@ -209,11 +220,12 @@ Repeat for the second backend VM.
 
 | Symptom | Cause / Fix |
 |---|---|
-| Backend `/health` returns 503 | Model still loading — wait 2–4 minutes. |
-| nginx returns **502 Bad Gateway** | Backend not running or not yet ready. Check `systemctl status cti-translate-backend` and `/health`. |
+| Backend `/health` returns 503 | Model still loading — wait a few seconds. If it never becomes ready, check logs with `journalctl -u cti-translate-backend-v3`. |
+| `setup_v3.sh` exits with "GGUF model not found" | File missing from `~/models/`. Complete Section 3. |
+| nginx returns **502 Bad Gateway** | Backend not running or not yet ready. Check `systemctl status cti-translate-backend-v3` and `/health`. |
 | Translation **times out** in browser | Increase `proxy_read_timeout` in `nginx.conf` (already 600s) and reload nginx. |
 | **Wrong script** in Chinese output | Confirm the EN→TC system prompt is applied; check `source_lang`/`target_lang` are exactly the supported strings. |
-| **Model weights not found** | Ensure `HUGGINGFACE_HUB_OFFLINE=1` is set (the systemd unit sets it) and the cache path matches Section 3c exactly. |
+| **Inference error** in API response | Check logs. Usually a corrupt GGUF file or insufficient RAM (need ≥ 8 GB). |
 | Offline `pip install` fails | A wheel is missing — see `backend/wheels/DOWNLOAD_INSTRUCTIONS.md` step 3. |
 
 ---
@@ -223,7 +235,8 @@ Repeat for the second backend VM.
 Scaling out is two steps:
 
 1. **Deploy backend** on the new VM following Section 4 (copy `backend/`,
-   transfer weights, run `setup.sh`, confirm `/health` is ready).
+   transfer GGUF file to `~/models/`, run `setup_v3.sh`, confirm `/health`
+   is ready).
 2. **Register it with nginx** on VM 1 — add one line to the upstream block in
    `nginx.conf`:
    ```nginx

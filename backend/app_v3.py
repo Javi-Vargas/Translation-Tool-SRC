@@ -1,41 +1,49 @@
 """
-app.py — CTI Translation Service backend, V1 (float32 baseline).
+app_v3.py — CTI Translation Service backend, V3 (llama-cpp-python + GGUF Q5_K_M).
 
-FastAPI + Qwen2.5-7B-Instruct via transformers, float32.
-~5 minutes per document on CPU.  See app_v2.py (bfloat16 + torch.compile)
-and app_v3.py (llama-cpp-python GGUF Q5_K_M, ~3 minutes) for faster variants.
+Replaces the transformers + PyTorch stack (V1/V2) entirely with llama-cpp-python,
+loading a pre-quantised Q5_K_M GGUF file.
 
-Loads the model once at startup and keeps it resident for the process lifetime.
-Exposes /health (for nginx upstream gating) and /translate.
+Why this is faster:
+  - GGUF Q5_K_M is ~5.5 bits/weight vs 32 (V1) or 16 (V2) bits/weight.
+    The model fits in ~5 GB RAM instead of ~14–28 GB.
+  - llama-cpp's highly optimised GGML kernels outperform PyTorch on CPU for
+    autoregressive generation.
+  - No torch.compile warm-up penalty on the first request.
 
-Air-gapped: HUGGINGFACE_HUB_OFFLINE is forced on before transformers is imported
-so the library never attempts an outbound connection.
+Observed: ~3 minutes per document (down from ~5 min V1 and ~3–4 min V2).
+
+Model file required (single GGUF, ~5.5 GB):
+    qwen2.5-7b-instruct-q5_k_m.gguf
+    Download with:  staging/download_model_gguf.sh
+    Transfer to VM: ~/models/qwen2.5-7b-instruct-q5_k_m.gguf
+    Override path:  export GGUF_MODEL_PATH=/path/to/file.gguf
 
 Run:
-    uvicorn app:app --host 0.0.0.0 --port 8000
+    uvicorn app_v3:app --host 0.0.0.0 --port 8000
 """
 
 import os
-
-# Must be set BEFORE importing transformers, or it will try to reach HuggingFace.
-os.environ.setdefault("HUGGINGFACE_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-
 import threading
 from contextlib import asynccontextmanager
 
-import torch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from llama_cpp import Llama
 from pydantic import BaseModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from placeholder_utils import substitute_after, substitute_before
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+MODEL_PATH = os.environ.get(
+    "GGUF_MODEL_PATH",
+    os.path.expanduser("~/models/qwen2.5-7b-instruct-q5_k_m.gguf"),
+)
+
+# Use all physical cores by default; override with MODEL_THREADS env var.
+N_THREADS = int(os.environ.get("MODEL_THREADS", os.cpu_count() or 8))
 
 SUPPORTED_LANGUAGES = [
     "English",
@@ -48,8 +56,7 @@ MAX_NEW_TOKENS = 512
 # ---------------------------------------------------------------------------
 # Global model state
 # ---------------------------------------------------------------------------
-model = None
-tokenizer = None
+llm: Llama | None = None
 model_ready = False
 _load_error: str | None = None
 
@@ -174,43 +181,33 @@ def script_check(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Model loading / inference
+# Model loading / inference  (V3: llama-cpp-python replaces torch+transformers)
 # ---------------------------------------------------------------------------
 def _load_model() -> None:
-    global model, tokenizer, model_ready, _load_error
+    global llm, model_ready, _load_error
     try:
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.float32,
+        llm = Llama(
+            model_path=MODEL_PATH,
+            n_ctx=4096,        # sufficient for paragraph-by-paragraph translation
+            n_threads=N_THREADS,
+            chat_format="chatml",  # Qwen2.5 uses the ChatML template
+            verbose=False,
         )
-        model.eval()
         model_ready = True
     except Exception as exc:  # noqa: BLE001 — surface any load failure via /health
         _load_error = str(exc)
 
 
 def run_model(system_prompt: str, prompt: str) -> str:
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt},
-    ]
-    formatted = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
+    response = llm.create_chat_completion(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=MAX_NEW_TOKENS,
+        temperature=0.0,
     )
-    inputs = tokenizer(formatted, return_tensors="pt")
-    prompt_len = inputs["input_ids"].shape[1]
-
-    with torch.no_grad():
-        output_tokens = model.generate(
-            **inputs,
-            max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-
-    new_tokens = output_tokens[0][prompt_len:]
-    return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    return response["choices"][0]["message"]["content"].strip()
 
 
 def translate_document(
@@ -249,14 +246,14 @@ def translate_document(
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Load the model in a background thread so /health can report "loading"
-    # while the (multi-minute) load proceeds.
+    # llama-cpp loads the GGUF by memory-mapping it — typically a few seconds,
+    # not minutes, so /health turns ready quickly.
     thread = threading.Thread(target=_load_model, daemon=True)
     thread.start()
     yield
 
 
-app = FastAPI(title="CTI Translation Service", lifespan=lifespan)
+app = FastAPI(title="CTI Translation Service (V3)", lifespan=lifespan)
 
 
 class TranslateRequest(BaseModel):

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,6 +17,19 @@
     --ok: #3fb950;
     --bad: #f85149;
     --warn: #d29922;
+  }
+  html[data-theme="light"] {
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --panel-2: #f0f2f5;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --muted: #656d76;
+    --accent: #0969da;
+    --accent-hover: #0860ca;
+    --ok: #1a7f37;
+    --bad: #cf222e;
+    --warn: #9a6700;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -40,11 +53,27 @@
   .brand { font-size: 18px; font-weight: 600; letter-spacing: 0.3px; }
   .brand .sub { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
 
+  .header-right { display: flex; align-items: center; gap: 16px; }
+
   .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
   .dot.bad { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
   .dot.warn { background: var(--warn); }
+
+  .theme-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 6px;
+    width: 32px; height: 32px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .theme-btn:hover { color: var(--text); background: var(--panel-2); }
+  .theme-btn svg { width: 18px; height: 18px; display: block; }
 
   main {
     flex: 1;
@@ -99,6 +128,26 @@
     font-size: 12px; color: var(--muted); min-height: 34px;
     display: flex; align-items: center; justify-content: space-between;
   }
+
+  .copy-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 3px 7px;
+    display: none;
+    align-items: center;
+    gap: 4px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    transition: color 0.15s, background 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .copy-btn:hover { color: var(--text); background: var(--panel-2); }
+  .copy-btn.copied { color: var(--ok); }
+  .copy-btn svg { width: 13px; height: 13px; display: block; }
 
   .swap-col { display: flex; align-items: center; }
   .swap-btn {
@@ -171,9 +220,12 @@
 <body>
   <header>
     <div class="brand">CTI Translation<span class="sub">threat intelligence · air-gapped</span></div>
-    <div class="status">
-      <span id="statusDot" class="dot"></span>
-      <span id="statusText">Checking backend…</span>
+    <div class="header-right">
+      <div class="status">
+        <span id="statusDot" class="dot"></span>
+        <span id="statusText">Checking backend…</span>
+      </div>
+      <button id="themeBtn" class="theme-btn" title="Toggle light/dark mode"></button>
     </div>
   </header>
 
@@ -211,6 +263,10 @@
         <textarea id="targetText" readonly placeholder="Translation will appear here…"></textarea>
         <div class="panel-foot">
           <div id="ctiScore" class="cti"></div>
+          <button id="copyBtn" class="copy-btn" title="Copy translation to clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            Copy
+          </button>
         </div>
       </div>
     </div>
@@ -228,18 +284,82 @@
 
   var LANGS = ["English", "Traditional Chinese", "Simplified Chinese"];
 
-  var sourceLang = document.getElementById("sourceLang");
-  var targetLang = document.getElementById("targetLang");
-  var sourceText = document.getElementById("sourceText");
-  var targetText = document.getElementById("targetText");
-  var charCount  = document.getElementById("charCount");
+  var sourceLang  = document.getElementById("sourceLang");
+  var targetLang  = document.getElementById("targetLang");
+  var sourceText  = document.getElementById("sourceText");
+  var targetText  = document.getElementById("targetText");
+  var charCount   = document.getElementById("charCount");
   var translateBtn = document.getElementById("translateBtn");
-  var swapBtn = document.getElementById("swapBtn");
-  var progress = document.getElementById("progress");
-  var errorBox = document.getElementById("error");
-  var ctiScore = document.getElementById("ctiScore");
-  var statusDot = document.getElementById("statusDot");
-  var statusText = document.getElementById("statusText");
+  var swapBtn     = document.getElementById("swapBtn");
+  var progress    = document.getElementById("progress");
+  var errorBox    = document.getElementById("error");
+  var ctiScore    = document.getElementById("ctiScore");
+  var statusDot   = document.getElementById("statusDot");
+  var statusText  = document.getElementById("statusText");
+  var themeBtn    = document.getElementById("themeBtn");
+  var copyBtn     = document.getElementById("copyBtn");
+
+  // ---- Theme toggle ----
+  var SUN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+  var MOON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    themeBtn.innerHTML = theme === "light" ? MOON_SVG : SUN_SVG;
+    try { localStorage.setItem("cti-theme", theme); } catch (e) {}
+  }
+
+  var savedTheme = "dark";
+  try { savedTheme = localStorage.getItem("cti-theme") || "dark"; } catch (e) {}
+  applyTheme(savedTheme);
+
+  themeBtn.addEventListener("click", function () {
+    var current = document.documentElement.getAttribute("data-theme");
+    applyTheme(current === "light" ? "dark" : "light");
+  });
+
+  // ---- Copy to clipboard ----
+  var COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  var CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  var copyTimer = null;
+
+  copyBtn.addEventListener("click", function () {
+    var text = targetText.value;
+    if (!text) return;
+
+    function onCopied() {
+      copyBtn.classList.add("copied");
+      copyBtn.innerHTML = CHECK_SVG + " Copied!";
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(function () {
+        copyBtn.classList.remove("copied");
+        copyBtn.innerHTML = COPY_SVG + " Copy";
+      }, 2000);
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(onCopied).catch(function () {});
+    } else {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        onCopied();
+      } catch (e) {}
+    }
+  });
+
+  function showCopyBtn() { copyBtn.style.display = "flex"; }
+  function hideCopyBtn() {
+    copyBtn.style.display = "none";
+    copyBtn.classList.remove("copied");
+    copyBtn.innerHTML = COPY_SVG + " Copy";
+    if (copyTimer) { clearTimeout(copyTimer); copyTimer = null; }
+  }
 
   // ---- Character count ----
   function updateCount() {
@@ -285,6 +405,7 @@
     targetText.value = st;
     updateCount();
     clearScore();
+    hideCopyBtn();
   });
 
   // ---- Progress messages ----
@@ -381,6 +502,7 @@
     var text = sourceText.value.trim();
     clearError();
     clearScore();
+    hideCopyBtn();
 
     if (!text) { showError("Please enter some text to translate."); return; }
     if (sourceLang.value === targetLang.value) {
@@ -419,6 +541,7 @@
         }
         targetText.value = res.body.translation || "";
         renderScore(res.body);
+        if (res.body.translation) showCopyBtn();
       })
       .catch(function (e) {
         showError("Could not reach the backend. It may be unreachable or the request timed out. (" + e.message + ")");

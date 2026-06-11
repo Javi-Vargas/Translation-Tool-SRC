@@ -4,7 +4,11 @@ backend/wheels/*.whl
 # Staging artifacts
 staging/.staging-venv/
 staging/model-cache/
+staging/model-cache-gguf/
 staging/*.log
+
+# Frontend offline nginx packages — re-downloadable, not committed for repo leanness
+frontend/deb/
 
 # Model cache (never commit ~15 GB of weights)
 **/models--*/

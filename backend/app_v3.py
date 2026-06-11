@@ -39,7 +39,7 @@ from placeholder_utils import substitute_after, substitute_before
 # ---------------------------------------------------------------------------
 MODEL_PATH = os.environ.get(
     "GGUF_MODEL_PATH",
-    os.path.expanduser("~/models/qwen2.5-7b-instruct-q5_k_m.gguf"),
+    os.path.expanduser("~/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"),
 )
 
 # Use all physical cores by default; override with MODEL_THREADS env var.

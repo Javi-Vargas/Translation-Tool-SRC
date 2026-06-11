@@ -46,7 +46,7 @@ deploy.
 | 1 | Application code (`app_v3.py`, `placeholder_utils.py`, UI, configs) | tiny | ✅ present | already here |
 | 2 | Pinned `requirements_v3.txt` | tiny | ✅ present (`backend/requirements_v3.txt`) | §3.1 to regenerate |
 | 3 | Python dependency **wheels** | ~100 MB | ⬜ **must download** | §3.1 |
-| 4 | **Qwen2.5-7B-Instruct Q5_K_M GGUF** model file | ~5.5 GB | ⬜ **must download** | §3.2 |
+| 4 | **Qwen2.5-7B-Instruct Q5_K_M GGUF** model (2 shards) | ~5.5 GB | ⬜ **must download** | §3.2 |
 | 5 | **nginx** + dependencies as `.deb` (for air-gapped install) | ~5 MB | ⬜ optional, download if VM 1 is truly offline | §3.3 |
 
 Items 3, 4, and 5 are the binary payloads to acquire on the staging machine.
@@ -90,15 +90,60 @@ What it does (manual equivalent):
 pip install huggingface_hub
 python - <<'PY'
 from huggingface_hub import hf_hub_download
-hf_hub_download(
-    repo_id="Qwen/Qwen2.5-7B-Instruct-GGUF",
-    filename="qwen2.5-7b-instruct-q5_k_m.gguf",
-    local_dir="staging/model-cache-gguf",
-)
+for shard in (
+    "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf",
+    "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf",
+):
+    hf_hub_download(
+        repo_id="Qwen/Qwen2.5-7B-Instruct-GGUF",
+        filename=shard,
+        local_dir="staging/model-cache-gguf",
+    )
 PY
 ```
 
-Result: `staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf` (~5.5 GB).
+Result: two shards in `staging/model-cache-gguf/` (~5.5 GB total):
+- `qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf`
+- `qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf`
+
+#### Manual download with `wget` or `curl`  *(no Python required)*
+
+If you'd rather download the shards directly without `huggingface_hub`, use
+`wget` or `curl` against the Hugging Face raw file URL. Run these commands from
+the **project root** (`cti-translate/`):
+
+```bash
+mkdir -p staging/model-cache-gguf
+cd staging/model-cache-gguf
+
+# Shard 1 (~2.8 GB)
+wget "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+
+# Shard 2 (~2.7 GB)
+wget "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
+```
+
+Or with `curl`:
+```bash
+mkdir -p staging/model-cache-gguf
+cd staging/model-cache-gguf
+
+curl -L -O "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+curl -L -O "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
+```
+
+> **Rate limits:** Hugging Face may throttle unauthenticated downloads. If you
+> hit a 429 or the download is very slow, add your HF token as a header:
+> `wget --header="Authorization: Bearer hf_xxx" <url>`
+> or set `HF_TOKEN=hf_xxx` and use the automated script instead.
+
+Both files must land at:
+```
+cti-translate/staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
+cti-translate/staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf
+```
+
+From there, follow §4 to transfer them to the backend VMs.
 
 ### 3.3 nginx as offline `.deb` packages  *(only if VM 1 is air-gapped)*
 
@@ -129,7 +174,8 @@ After acquiring everything on the staging machine, transfer to the VMs as below.
 | Pinned reqs | `backend/requirements_v3.txt` | `~/cti-translate-backend/requirements_v3.txt` |
 | Wheels | `backend/wheels/*.whl` | `~/cti-translate-backend/wheels/` |
 | Setup script | `backend/setup_v3.sh` | `~/cti-translate-backend/setup_v3.sh` |
-| **Model file** | `staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf` | `~/models/qwen2.5-7b-instruct-q5_k_m.gguf` |
+| **Model shard 1** | `staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf` | `~/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf` |
+| **Model shard 2** | `staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf` | `~/models/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf` |
 
 > The GGUF model file goes in `~/models/` on each backend VM — **not** inside
 > the app folder. `setup_v3.sh` checks this path exists before proceeding.
@@ -149,8 +195,8 @@ After acquiring everything on the staging machine, transfer to the VMs as below.
 On each backend VM, confirm the GGUF file is present and the library imports work:
 
 ```bash
-# Check the file exists and is the right size (~5.5 GB)
-ls -lh ~/models/qwen2.5-7b-instruct-q5_k_m.gguf
+# Check both shards exist and total ~5.5 GB
+ls -lh ~/models/qwen2.5-7b-instruct-q5_k_m-000*.gguf
 
 # Confirm llama-cpp-python installed correctly
 source ~/translation-venv-v3/bin/activate      # if venv already created by setup_v3.sh
@@ -172,10 +218,10 @@ Then proceed to **`DEPLOYMENT_RUNBOOK.md`** for the full deploy + verification.
 
 - [ ] Staging machine matches VMs (Ubuntu 24 / Python 3.12 / x86_64)
 - [ ] `build_offline_bundle.sh` run → wheels in `backend/wheels/`, `requirements_v3.txt` pinned
-- [ ] GGUF model downloaded via `download_model_gguf.sh` — **~5.5 GB**
+- [ ] Both GGUF shards downloaded via `download_model_gguf.sh` — **~5.5 GB total**
 - [ ] nginx `.deb`s downloaded if VM 1 is air-gapped (§3.3)
 - [ ] **Backend VMs have ≥ 8 GB RAM**
 - [ ] All artifacts placed per §4
-- [ ] `~/models/qwen2.5-7b-instruct-q5_k_m.gguf` present on each backend VM
+- [ ] Both GGUF shards (`-00001-of-00002.gguf` and `-00002-of-00002.gguf`) present in `~/models/` on each backend VM
 - [ ] Offline install verified per §5
 - [ ] Deploy per `DEPLOYMENT_RUNBOOK.md`

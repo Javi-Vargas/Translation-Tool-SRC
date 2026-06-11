@@ -30,14 +30,17 @@ VENV_DIR="$HOME/translation-venv-v3"
 SERVICE_NAME="cti-translate-backend-v3"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUN_USER="$(whoami)"
-GGUF_MODEL_PATH="${HOME}/models/qwen2.5-7b-instruct-q5_k_m.gguf"
+# Q5_K_M is split into two shards; llama-cpp loads both when pointed at shard 1.
+GGUF_MODEL_PATH="${HOME}/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf"
+GGUF_SHARD2="${HOME}/models/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf"
 
-# Verify the GGUF file is present before installing anything.
-if [ ! -f "${GGUF_MODEL_PATH}" ]; then
-    echo "ERROR: GGUF model not found at ${GGUF_MODEL_PATH}"
-    echo "  Transfer it first:"
+# Verify both shards are present before installing anything.
+if [ ! -f "${GGUF_MODEL_PATH}" ] || [ ! -f "${GGUF_SHARD2}" ]; then
+    echo "ERROR: GGUF model shards not found at ~/models/"
+    echo "  Transfer both shards first:"
     echo "    mkdir -p ~/models"
-    echo "    scp <staging>:staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf ~/models/"
+    echo "    scp <staging>:staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf ~/models/"
+    echo "    scp <staging>:staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf ~/models/"
     exit 1
 fi
 echo "==> Model file found: ${GGUF_MODEL_PATH}"

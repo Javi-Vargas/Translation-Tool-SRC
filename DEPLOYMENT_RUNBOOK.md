@@ -57,7 +57,7 @@ cd cti-translate/staging
 After this:
 - `backend/requirements_v3.txt` has exact pinned versions
 - `backend/wheels/` is full of `.whl` files (~100 MB)
-- `staging/model-cache-gguf/` holds the GGUF model file (~5.5 GB)
+- `staging/model-cache-gguf/` holds the two GGUF model shards (~5.5 GB total)
 
 ---
 
@@ -87,45 +87,55 @@ After this:
 pip install huggingface_hub
 python - <<'PY'
 from huggingface_hub import hf_hub_download
-hf_hub_download(
-    repo_id="Qwen/Qwen2.5-7B-Instruct-GGUF",
-    filename="qwen2.5-7b-instruct-q5_k_m.gguf",
-    local_dir="staging/model-cache-gguf",
-)
+for shard in (
+    "qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf",
+    "qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf",
+):
+    hf_hub_download(
+        repo_id="Qwen/Qwen2.5-7B-Instruct-GGUF",
+        filename=shard,
+        local_dir="staging/model-cache-gguf",
+    )
 PY
 ```
 
-### 3b. Locate the file
+### 3b. Locate the files
 
 ```
-staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf    (~5.5 GB)
+staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf    (~2.8 GB)
+staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf    (~2.7 GB)
 ```
 
 ### 3c. Transfer to VM 2 and VM 3
 
-On each backend VM, create the models directory and copy the file:
+On each backend VM, create the models directory and copy **both shards**:
 
 ```bash
 mkdir -p ~/models
-scp <staging>:cti-translate/staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m.gguf \
+scp <staging>:cti-translate/staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf \
+    ~/models/
+scp <staging>:cti-translate/staging/model-cache-gguf/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf \
     ~/models/
 ```
 
 Or transfer via USB/sneakernet if scp is not available across the air-gap.
-The file must end up at:
+Both shards must end up at:
 
 ```
-~/models/qwen2.5-7b-instruct-q5_k_m.gguf
+~/models/qwen2.5-7b-instruct-q5_k_m-00001-of-00002.gguf
+~/models/qwen2.5-7b-instruct-q5_k_m-00002-of-00002.gguf
 ```
+
+`setup_v3.sh` checks for both files and will exit immediately if either is missing.
 
 ### 3d. Verify on each backend VM
 
 ```bash
-ls -lh ~/models/qwen2.5-7b-instruct-q5_k_m.gguf
+ls -lh ~/models/qwen2.5-7b-instruct-q5_k_m-000*.gguf
 ```
 
-Expected: a file of approximately 5.5 GB. If the size looks wrong the download
-was interrupted — re-download and re-transfer.
+Expected: two files totalling approximately 5.5 GB. If either is missing or
+the sizes look wrong the download was interrupted — re-download and re-transfer.
 
 ---
 
